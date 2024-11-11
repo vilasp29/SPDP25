@@ -5,6 +5,137 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Event RSVP</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+    <script type="module">
+        import config from './config.js';
+        
+        // GitHub API configuration
+        const api = {
+            token: config.GITHUB_TOKEN,
+            owner: config.REPO_OWNER,
+            repo: config.REPO_NAME,
+            filePath: config.FILE_PATH,
+            
+            headers() {
+                return {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                };
+            },
+            
+            async getFile() {
+                try {
+                    const response = await axios.get(
+                        `https://api.github.com/repos/${this.owner}/${this.repo}/contents/${this.filePath}`,
+                        { headers: this.headers() }
+                    );
+                    return {
+                        content: JSON.parse(atob(response.data.content)),
+                        sha: response.data.sha
+                    };
+                } catch (error) {
+                    if (error.response?.status === 404) {
+                        return { content: [], sha: null };
+                    }
+                    throw error;
+                }
+            },
+            
+            async updateFile(content, sha) {
+                const payload = {
+                    message: 'Update RSVP data',
+                    content: btoa(JSON.stringify(content, null, 2)),
+                    ...(sha && { sha })
+                };
+                
+                return axios.put(
+                    `https://api.github.com/repos/${this.owner}/${this.repo}/contents/${this.filePath}`,
+                    payload,
+                    { headers: this.headers() }
+                );
+            }
+        };
+
+        // Form handling
+        document.getElementById('rsvpForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = '';
+            messageDiv.textContent = 'Submitting...';
+            
+            try {
+                const formData = {
+                    familyName: document.getElementById('familyName').value.trim(),
+                    adults: parseInt(document.getElementById('adults').value),
+                    children: parseInt(document.getElementById('children').value),
+                    babies: parseInt(document.getElementById('babies').value),
+                    timestamp: new Date().toISOString()
+                };
+
+                const { content: currentData, sha } = await api.getFile();
+                
+                if (currentData.some(rsvp => 
+                    rsvp.familyName.toLowerCase() === formData.familyName.toLowerCase()
+                )) {
+                    throw new Error('This family name has already been registered');
+                }
+
+                const updatedData = [...currentData, formData];
+                await api.updateFile(updatedData, sha);
+                
+                messageDiv.className = 'success';
+                messageDiv.textContent = 'RSVP submitted successfully!';
+                
+                updateTable(updatedData);
+                e.target.reset();
+                
+            } catch (error) {
+                messageDiv.className = 'error';
+                messageDiv.textContent = error.message || 'Error submitting RSVP';
+                console.error('Error:', error);
+            }
+        });
+
+        function updateTable(rsvps) {
+            const tbody = document.querySelector('#rsvpTable tbody');
+            tbody.innerHTML = '';
+            
+            const totals = { adults: 0, children: 0, babies: 0 };
+            
+            rsvps.forEach(rsvp => {
+                const row = document.createElement('tr');
+                const total = Number(rsvp.adults) + Number(rsvp.children) + Number(rsvp.babies);
+                
+                totals.adults += Number(rsvp.adults);
+                totals.children += Number(rsvp.children);
+                totals.babies += Number(rsvp.babies);
+                
+                row.innerHTML = `
+                    <td>${rsvp.familyName}</td>
+                    <td>${rsvp.adults}</td>
+                    <td>${rsvp.children}</td>
+                    <td>${rsvp.babies}</td>
+                    <td>${total}</td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+            
+            // Add totals row
+            const totalsRow = document.createElement('tr');
+            totalsRow.className = 'totals';
+            totalsRow.innerHTML = `
+                <td><strong>Totals</strong></td>
+                <td><strong>${totals.adults}</strong></td>
+                <td><strong>${totals.children}</strong></td>
+                <td><strong>${totals.babies}</strong></td>
+                <td><strong>${totals.adults + totals.children + totals.babies}</strong></td>
+            `;
+            tbody.appendChild(totalsRow);
+        }
+
+        // Initial load
+        api.getFile().then(({content}) => updateTable(content));
+    </script>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -58,10 +189,16 @@
         .error {
             color: #dc2626;
             margin-top: 0.5rem;
+            padding: 0.5rem;
+            background-color: #fee2e2;
+            border-radius: 4px;
         }
         .success {
             color: #059669;
             margin-top: 0.5rem;
+            padding: 0.5rem;
+            background-color: #d1fae5;
+            border-radius: 4px;
         }
         table {
             width: 100%;
@@ -74,6 +211,9 @@
             text-align: left;
         }
         th {
+            background-color: #f3f4f6;
+        }
+        .totals {
             background-color: #f3f4f6;
         }
     </style>
@@ -122,111 +262,5 @@
             <tbody></tbody>
         </table>
     </div>
-
-    <script>
-        // Replace these with your GitHub repository details
-        const GITHUB_TOKEN = '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';
-        const REPO_OWNER = 'vilasp29';
-        const REPO_NAME = 'SPDP25';
-        const FILE_PATH = 'rsvps.json';
-
-        async function fetchCurrentData() {
-            try {
-                const response = await axios.get(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${FILE_PATH}`, {
-                    headers: {
-                        'Authorization': `token ${GITHUB_TOKEN}`
-                    }
-                });
-                
-                const content = atob(response.data.content);
-                return {
-                    sha: response.data.sha,
-                    data: JSON.parse(content)
-                };
-            } catch (error) {
-                if (error.response && error.response.status === 404) {
-                    return { data: [] };
-                }
-                throw error;
-            }
-        }
-
-        async function updateGithubFile(newData, sha) {
-            const content = btoa(JSON.stringify(newData, null, 2));
-            
-            const payload = {
-                message: 'Update RSVP data',
-                content,
-                sha
-            };
-
-            await axios.put(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${FILE_PATH}`, payload, {
-                headers: {
-                    'Authorization': `token ${GITHUB_TOKEN}`
-                }
-            });
-        }
-
-        function updateTable(rsvps) {
-            const tbody = document.querySelector('#rsvpTable tbody');
-            tbody.innerHTML = '';
-            
-            rsvps.forEach(rsvp => {
-                const row = document.createElement('tr');
-                const total = Number(rsvp.adults) + Number(rsvp.children) + Number(rsvp.babies);
-                
-                row.innerHTML = `
-                    <td>${rsvp.familyName}</td>
-                    <td>${rsvp.adults}</td>
-                    <td>${rsvp.children}</td>
-                    <td>${rsvp.babies}</td>
-                    <td>${total}</td>
-                `;
-                
-                tbody.appendChild(row);
-            });
-        }
-
-        document.getElementById('rsvpForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const messageDiv = document.getElementById('message');
-            messageDiv.innerHTML = '';
-            
-            try {
-                const newRSVP = {
-                    familyName: document.getElementById('familyName').value,
-                    adults: parseInt(document.getElementById('adults').value),
-                    children: parseInt(document.getElementById('children').value),
-                    babies: parseInt(document.getElementById('babies').value),
-                    timestamp: new Date().toISOString()
-                };
-
-                const { data: currentData, sha } = await fetchCurrentData();
-                
-                // Check for duplicate family name
-                if (currentData.some(rsvp => rsvp.familyName.toLowerCase() === newRSVP.familyName.toLowerCase())) {
-                    throw new Error('A family with this name has already RSVP\'d');
-                }
-                
-                const updatedData = [...currentData, newRSVP];
-                await updateGithubFile(updatedData, sha);
-                
-                messageDiv.classList.add('success');
-                messageDiv.textContent = 'RSVP submitted successfully!';
-                
-                updateTable(updatedData);
-                e.target.reset();
-                
-            } catch (error) {
-                messageDiv.classList.add('error');
-                messageDiv.textContent = error.message || 'Error submitting RSVP. Please try again.';
-                console.error('Error:', error);
-            }
-        });
-
-        // Initial load of data
-        fetchCurrentData().then(({data}) => updateTable(data));
-    </script>
 </body>
 </html>
